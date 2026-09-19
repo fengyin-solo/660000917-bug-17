@@ -31,9 +31,23 @@
       </div>
       <div style="background:#fff;padding:12px;border-radius:8px;border:1px solid #e0e0e0">
         <div style="font-size:11px;color:#888;margin-bottom:4px">需优先巡检</div>
-        <div :style="{ fontSize:'20px', fontWeight:700, color: store.healthSummary.highPriorityCount > 0 ? '#c62828' : '#2e7d32' }">
-          {{ store.healthSummary.highPriorityCount + store.healthSummary.mediumPriorityCount }} 台
+        <div :style="{ fontSize:'20px', fontWeight:700, color: store.priorityInspectionList.length > 0 ? '#c62828' : '#2e7d32' }">
+          {{ store.priorityInspectionList.length }} 台
         </div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-shrink:0">
+      <span style="font-size:11px;color:#888">统计周期</span>
+      <div style="display:flex;gap:4px">
+        <button v-for="period in healthPeriodOptions" :key="period.value"
+          @click="store.setHealthPeriod(period.value)"
+          :style="{ padding:'4px 14px', borderRadius:'4px', border:'1px solid ' + (store.healthPeriod === period.value ? '#1976d2' : '#ddd'),
+            background: store.healthPeriod === period.value ? '#e3f2fd' : '#fff',
+            color: store.healthPeriod === period.value ? '#1976d2' : '#666',
+            cursor:'pointer', fontSize:'12px', fontWeight:500 }">
+          {{ period.label }}
+        </button>
       </div>
     </div>
 
@@ -65,7 +79,7 @@
             <span style="font-size:14px">📱</span>
             <span style="font-weight:600;font-size:13px">{{ selectedDevice.deviceName }}</span>
           </div>
-          <button @click="selectedDevice = null" style="background:none;border:none;cursor:pointer;color:#999;font-size:16px">×</button>
+          <button @click="selectedDeviceId = null" style="background:none;border:none;cursor:pointer;color:#999;font-size:16px">×</button>
         </div>
         <div style="display:flex;gap:12px;margin-bottom:10px">
           <div style="flex:1">
@@ -105,7 +119,7 @@
           <h4 style="margin:0;font-size:13px;color:#333;display:flex;align-items:center;gap:6px">
             🔋 电量趋势
           </h4>
-          <span style="font-size:11px;color:#888">最近24小时</span>
+          <span style="font-size:11px;color:#888">{{ periodChartLabel }}</span>
         </div>
         <div ref="batteryChartRef" style="width:100%;height:120px"></div>
       </div>
@@ -115,7 +129,7 @@
           <h4 style="margin:0;font-size:13px;color:#333;display:flex;align-items:center;gap:6px">
             🌡️ 温度波动
           </h4>
-          <span style="font-size:11px;color:#888">最近24小时</span>
+          <span style="font-size:11px;color:#888">{{ periodChartLabel }}</span>
         </div>
         <div ref="tempChartRef" style="width:100%;height:120px"></div>
       </div>
@@ -125,7 +139,7 @@
           <h4 style="margin:0;font-size:13px;color:#333;display:flex;align-items:center;gap:6px">
             ⏱️ 在线时长统计
           </h4>
-          <span style="font-size:11px;color:#888">最近24小时</span>
+          <span style="font-size:11px;color:#888">{{ periodChartLabel }}</span>
         </div>
         <div v-if="selectedDevice" style="display:flex;flex-direction:column;gap:8px">
           <div style="display:flex;align-items:center;gap:8px">
@@ -170,10 +184,16 @@
     <div v-if="activeTab === 'priority'" style="flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px">
       <div style="background:#fff;padding:10px 12px;border-radius:8px;border:1px solid #e0e0e0;display:flex;justify-content:space-between;align-items:center">
         <span style="font-size:12px;color:#666">按健康状态排序（低分优先）</span>
-        <span style="font-size:11px;color:#999">共 {{ store.deviceHealthList.length }} 台设备</span>
+        <span style="font-size:11px;color:#999">需巡检 {{ store.priorityInspectionList.length }} / {{ store.deviceHealthList.length }} 台</span>
       </div>
 
-      <div v-for="health in store.deviceHealthList" :key="health.deviceId"
+      <div v-if="store.priorityInspectionList.length === 0"
+        style="text-align:center;padding:40px 20px;background:#fff;border-radius:8px;border:1px solid #e0e0e0;color:#999;font-size:13px">
+        <div style="font-size:32px;margin-bottom:8px">✅</div>
+        <div>暂无需要优先巡检的设备</div>
+      </div>
+
+      <div v-for="health in store.priorityInspectionList" :key="health.deviceId"
         @click="handleDeviceClick(health)"
         @mouseenter="handleHover(health.deviceId)"
         @mouseleave="handleHover(null)"
@@ -273,9 +293,9 @@
 
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid #e0e0e0;flex-shrink:0">
       <div style="display:flex;gap:8px;font-size:11px;color:#888;flex-wrap:wrap;justify-content:center">
-        <span>🟢 正常 ≥70分</span>
-        <span>🟡 关注 40-69分</span>
-        <span>🔴 预警 <40分</span>
+        <span>🟢 正常 ≥{{ HEALTH_NORMAL_MIN }}分</span>
+        <span>🟡 关注 {{ HEALTH_ATTENTION_MIN }}-{{ HEALTH_NORMAL_MIN - 1 }}分</span>
+        <span>🔴 预警 &lt;{{ HEALTH_ATTENTION_MIN }}分</span>
       </div>
     </div>
   </div>
@@ -284,14 +304,34 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, nextTick } from 'vue';
 import { useIotStore } from '../stores/iot';
-import type { DeviceHealth, AlertType, AlertSeverity, Alert, HealthDataPoint } from '../types';
+import type { DeviceHealth, AlertType, AlertSeverity, Alert, HealthDataPoint, HealthPeriod } from '../types';
+import {
+  HEALTH_ATTENTION_MIN,
+  HEALTH_NORMAL_MIN,
+  HEALTH_PERIODS,
+  clampHealthScore
+} from '../utils/health';
 
 const store = useIotStore();
 
+const healthPeriodOptions = computed(() =>
+  (Object.keys(HEALTH_PERIODS) as HealthPeriod[]).map(value => ({
+    value,
+    label: HEALTH_PERIODS[value].label
+  }))
+);
+
+const periodChartLabel = computed(() => HEALTH_PERIODS[store.healthPeriod].chartLabel);
+
 const activeTab = ref<'overview' | 'priority' | 'records'>('priority');
-const selectedDevice = ref<DeviceHealth | null>(null);
+const selectedDeviceId = ref<string | null>(null);
 const batteryChartRef = ref<HTMLElement | null>(null);
 const tempChartRef = ref<HTMLElement | null>(null);
+
+// 始终从 store 取当前周期下的最新健康数据，切换日/周/月后不残留旧周期快照
+const selectedDevice = computed<DeviceHealth | null>(() =>
+  selectedDeviceId.value ? store.getDeviceHealth(selectedDeviceId.value) || null : null
+);
 
 const currentHistoryData = computed(() => {
   if (selectedDevice.value) {
@@ -301,7 +341,7 @@ const currentHistoryData = computed(() => {
 });
 
 function handleDeviceClick(health: DeviceHealth) {
-  selectedDevice.value = health;
+  selectedDeviceId.value = health.deviceId;
   store.setHighlightedDevice(health.deviceId);
   activeTab.value = 'overview';
   nextTick(() => {
@@ -312,7 +352,7 @@ function handleDeviceClick(health: DeviceHealth) {
 function handleAlertClick(alert: Alert) {
   const health = store.getDeviceHealth(alert.deviceId);
   if (health) {
-    selectedDevice.value = health;
+    selectedDeviceId.value = alert.deviceId;
   }
   store.setHighlightedDevice(alert.deviceId);
 }
@@ -324,26 +364,30 @@ function handleHover(deviceId: string | null) {
 }
 
 function getHealthScoreColor(score: number): string {
-  if (score >= 70) return '#4caf50';
-  if (score >= 40) return '#ff9800';
+  const s = clampHealthScore(score);
+  if (s >= HEALTH_NORMAL_MIN) return '#4caf50';
+  if (s >= HEALTH_ATTENTION_MIN) return '#ff9800';
   return '#f44336';
 }
 
 function getHealthScoreBgColor(score: number): string {
-  if (score >= 70) return '#e8f5e9';
-  if (score >= 40) return '#fff3e0';
+  const s = clampHealthScore(score);
+  if (s >= HEALTH_NORMAL_MIN) return '#e8f5e9';
+  if (s >= HEALTH_ATTENTION_MIN) return '#fff3e0';
   return '#ffebee';
 }
 
 function getHealthScoreTextColor(score: number): string {
-  if (score >= 70) return '#2e7d32';
-  if (score >= 40) return '#e65100';
+  const s = clampHealthScore(score);
+  if (s >= HEALTH_NORMAL_MIN) return '#2e7d32';
+  if (s >= HEALTH_ATTENTION_MIN) return '#e65100';
   return '#c62828';
 }
 
 function getPriorityBorderColor(health: DeviceHealth): string {
-  if (health.healthScore < 40) return '#ef9a9a';
-  if (health.healthScore < 70) return '#ffe082';
+  const s = clampHealthScore(health.healthScore);
+  if (s < HEALTH_ATTENTION_MIN) return '#ef9a9a';
+  if (s < HEALTH_NORMAL_MIN) return '#ffe082';
   return '#e0e0e0';
 }
 
@@ -498,14 +542,30 @@ function renderLineChart(
   const maxVal = Math.max(...values, yMax);
   const range = maxVal - minVal || 1;
 
+  // 只有一个历史点时不做 x 轴除法，把该点放在绘图区中间，避免 NaN
+  const denom = Math.max(data.length - 1, 1);
+  const xAt = (i: number) => padding.left + (data.length === 1 ? chartWidth / 2 : (i / denom) * chartWidth);
+
   const points = data.map((d, i) => {
-    const x = padding.left + (i / (data.length - 1)) * chartWidth;
+    const x = xAt(i);
     const y = padding.top + chartHeight - ((d[valueKey] - minVal) / range) * chartHeight;
     return { x, y, value: d[valueKey] };
   });
 
   const pathD = points.map((p, i) => (i === 0 ? `M ${p.x} ${p.y}` : `L ${p.x} ${p.y}`)).join(' ');
-  const areaD = `${pathD} L ${padding.left + chartWidth} ${padding.top + chartHeight} L ${padding.left} ${padding.top + chartHeight} Z`;
+
+  const timeLabels = [];
+  const labelCount = 6;
+  // 单点时仅画一个居中点，不绘制区域填充和重复的时间标签
+  for (let i = 0; i < labelCount; i++) {
+    const idx = data.length === 1 ? 0 : Math.floor((i / (labelCount - 1)) * (data.length - 1));
+    const date = new Date(data[idx].timestamp);
+    timeLabels.push({
+      x: xAt(idx),
+      label: date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    });
+  }
+  const uniqueTimeLabels = data.length === 1 ? timeLabels.slice(0, 1) : timeLabels;
 
   const gridLines = [];
   for (let i = 0; i <= 4; i++) {
@@ -526,27 +586,20 @@ function renderLineChart(
   svg += `<stop offset="100%" stop-color="${color}" stop-opacity="0"/>`;
   svg += `</linearGradient></defs>`;
 
-  svg += `<path d="${areaD}" fill="url(#gradient-${valueKey})"/>`;
+  // 单点时不画区域填充（会退化为异常三角形），只画点
+  if (points.length > 1) {
+    const areaD = `${pathD} L ${padding.left + chartWidth} ${padding.top + chartHeight} L ${padding.left} ${padding.top + chartHeight} Z`;
+    svg += `<path d="${areaD}" fill="url(#gradient-${valueKey})"/>`;
+  }
   svg += `<path d="${pathD}" fill="none" stroke="${color}" stroke-width="2"/>`;
 
   points.forEach((p, i) => {
-    if (i % Math.ceil(points.length / 6) === 0 || i === points.length - 1) {
+    if (points.length === 1 || i % Math.ceil(points.length / 6) === 0 || i === points.length - 1) {
       svg += `<circle cx="${p.x}" cy="${p.y}" r="3" fill="${color}"/>`;
     }
   });
 
-  const timeLabels = [];
-  const labelCount = 6;
-  for (let i = 0; i < labelCount; i++) {
-    const idx = Math.floor((i / (labelCount - 1)) * (data.length - 1));
-    const date = new Date(data[idx].timestamp);
-    timeLabels.push({
-      x: padding.left + (idx / (data.length - 1)) * chartWidth,
-      label: date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    });
-  }
-
-  timeLabels.forEach(label => {
+  uniqueTimeLabels.forEach(label => {
     svg += `<text x="${label.x}" y="${height - 5}" text-anchor="middle" font-size="9" fill="#999">${label.label}</text>`;
   });
 
@@ -569,6 +622,15 @@ watch(selectedDevice, () => {
   });
 });
 
+// 切换日/周/月后历史数据重新生成，阈值不变但图表需按新窗口重绘
+watch(() => store.healthPeriod, () => {
+  if (activeTab.value === 'overview') {
+    nextTick(() => {
+      renderCharts();
+    });
+  }
+});
+
 watch(activeTab, (newTab) => {
   if (newTab === 'overview') {
     nextTick(() => {
@@ -578,8 +640,8 @@ watch(activeTab, (newTab) => {
 });
 
 onMounted(() => {
-  if (store.deviceHealthList.length > 0 && !selectedDevice.value) {
-    selectedDevice.value = store.deviceHealthList[0];
+  if (store.deviceHealthList.length > 0 && !selectedDeviceId.value) {
+    selectedDeviceId.value = store.deviceHealthList[0].deviceId;
   }
   nextTick(() => {
     renderCharts();

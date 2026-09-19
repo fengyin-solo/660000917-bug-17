@@ -97,6 +97,8 @@ export interface TrackData {
   totalDuration: number;
 }
 
+export type HealthPeriod = 'day' | 'week' | 'month';
+
 export interface HealthDataPoint {
   timestamp: string;
   battery: number;
