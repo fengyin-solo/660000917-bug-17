@@ -210,7 +210,7 @@
           <div style="margin-top:6px">
             <div style="height:4px;background:#e0e0e0;border-radius:2px;overflow:hidden">
               <div :style="{ height:'100%', background: getHealthScoreColor(health.healthScore),
-                width: health.healthScore + '%', transition:'width 0.5s' }"></div>
+                width: getScorePercent(health.healthScore) + '%', transition:'width 0.5s' }"></div>
             </div>
           </div>
         </div>
@@ -273,9 +273,9 @@
 
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid #e0e0e0;flex-shrink:0">
       <div style="display:flex;gap:8px;font-size:11px;color:#888;flex-wrap:wrap;justify-content:center">
-        <span>🟢 正常 ≥70分</span>
-        <span>🟡 关注 40-69分</span>
-        <span>🔴 预警 <40分</span>
+        <span>🟢 正常 ≥{{ HEALTH_NORMAL_THRESHOLD }}分</span>
+        <span>🟡 关注 {{ HEALTH_WARNING_THRESHOLD }}-{{ HEALTH_NORMAL_THRESHOLD - 1 }}分</span>
+        <span>🔴 预警 <{{ HEALTH_WARNING_THRESHOLD }}分</span>
       </div>
     </div>
   </div>
@@ -285,6 +285,7 @@
 import { ref, computed, watch, onMounted, nextTick } from 'vue';
 import { useIotStore } from '../stores/iot';
 import type { DeviceHealth, AlertType, AlertSeverity, Alert, HealthDataPoint } from '../types';
+import { clampHealthScore, getHealthLevel, HEALTH_SCORE_MAX, HEALTH_WARNING_THRESHOLD, HEALTH_NORMAL_THRESHOLD } from '../utils/health';
 
 const store = useIotStore();
 
@@ -324,26 +325,30 @@ function handleHover(deviceId: string | null) {
 }
 
 function getHealthScoreColor(score: number): string {
-  if (score >= 70) return '#4caf50';
-  if (score >= 40) return '#ff9800';
+  const level = getHealthLevel(score);
+  if (level === 'normal') return '#4caf50';
+  if (level === 'attention') return '#ff9800';
   return '#f44336';
 }
 
 function getHealthScoreBgColor(score: number): string {
-  if (score >= 70) return '#e8f5e9';
-  if (score >= 40) return '#fff3e0';
+  const level = getHealthLevel(score);
+  if (level === 'normal') return '#e8f5e9';
+  if (level === 'attention') return '#fff3e0';
   return '#ffebee';
 }
 
 function getHealthScoreTextColor(score: number): string {
-  if (score >= 70) return '#2e7d32';
-  if (score >= 40) return '#e65100';
+  const level = getHealthLevel(score);
+  if (level === 'normal') return '#2e7d32';
+  if (level === 'attention') return '#e65100';
   return '#c62828';
 }
 
 function getPriorityBorderColor(health: DeviceHealth): string {
-  if (health.healthScore < 40) return '#ef9a9a';
-  if (health.healthScore < 70) return '#ffe082';
+  const level = getHealthLevel(health.healthScore);
+  if (level === 'warning') return '#ef9a9a';
+  if (level === 'attention') return '#ffe082';
   return '#e0e0e0';
 }
 
@@ -378,9 +383,13 @@ function getTrendText(trend: string): string {
   }
 }
 
+function getScorePercent(score: number): number {
+  return (clampHealthScore(score) / HEALTH_SCORE_MAX) * 100;
+}
+
 function getOnlinePercent(health: DeviceHealth): number {
   const total = health.onlineHours + health.offlineHours;
-  if (total === 0) return 0;
+  if (!total || total <= 0) return 0;
   return Math.round((health.onlineHours / total) * 100);
 }
 

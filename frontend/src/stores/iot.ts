@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { Device, Geofence, Alert, AlertType, AlertSeverity, DeviceGroup, DeviceThresholds, TrackData, TrackPoint, StayPoint, TrackSegment, HealthDataPoint, DeviceHealth, HealthSummary } from '../types';
+import { clampHealthScore, getHealthLevel, isPriorityInspection, HEALTH_WARNING_THRESHOLD, HEALTH_NORMAL_THRESHOLD } from '../utils/health';
 
 function generateId(prefix: string) {
   return prefix + Date.now() + Math.random().toString(36).slice(2, 6);
@@ -692,7 +693,7 @@ export const useIotStore = defineStore('iot', () => {
       score -= criticalCount * 15 + warningCount * 5;
     }
 
-    return Math.max(0, Math.min(100, score));
+    return clampHealthScore(score);
   }
 
   function calculateHealthTrend(history: HealthDataPoint[]): 'improving' | 'stable' | 'declining' {
@@ -730,9 +731,9 @@ export const useIotStore = defineStore('iot', () => {
       recommendations.push('温度偏高，建议检查设备运行环境');
     }
 
-    if (healthScore < 40) {
+    if (healthScore < HEALTH_WARNING_THRESHOLD) {
       recommendations.push('设备健康状态差，建议优先巡检');
-    } else if (healthScore < 60) {
+    } else if (healthScore < HEALTH_NORMAL_THRESHOLD) {
       recommendations.push('设备健康状态一般，建议近期安排巡检');
     }
 
@@ -759,8 +760,11 @@ export const useIotStore = defineStore('iot', () => {
   }
 
   function calculateOnlineHours(history: HealthDataPoint[]): { online: number; offline: number } {
-    const onlinePoints = history.filter(p => p.isOnline).length;
     const totalPoints = history.length;
+    if (totalPoints === 0) {
+      return { online: 0, offline: 0 };
+    }
+    const onlinePoints = history.filter(p => p.isOnline).length;
     const totalHours = totalPoints * 0.5;
     return {
       online: Math.round((onlinePoints / totalPoints) * totalHours * 10) / 10,
@@ -810,7 +814,7 @@ export const useIotStore = defineStore('iot', () => {
   });
 
   const priorityInspectionList = computed(() => {
-    return deviceHealthList.value.filter(h => h.healthScore < 60);
+    return deviceHealthList.value.filter(h => isPriorityInspection(h.healthScore));
   });
 
   const healthSummary = computed<HealthSummary>(() => {
@@ -829,12 +833,15 @@ export const useIotStore = defineStore('iot', () => {
 
     const avgHealthScore = Math.round(list.reduce((sum, h) => sum + h.healthScore, 0) / list.length);
     const totalAlertCount = list.reduce((sum, h) => sum + h.alertCount, 0);
-    const avgOnlineRate = Math.round((list.reduce((sum, h) => sum + (h.onlineHours / (h.onlineHours + h.offlineHours)), 0) / list.length) * 100);
+    const avgOnlineRate = Math.round((list.reduce((sum, h) => {
+      const totalHours = h.onlineHours + h.offlineHours;
+      return sum + (totalHours > 0 ? h.onlineHours / totalHours : 0);
+    }, 0) / list.length) * 100);
     const avgBatteryLevel = Math.round(list.reduce((sum, h) => sum + h.batteryLevel, 0) / list.length);
 
-    const highPriorityCount = list.filter(h => h.healthScore < 40).length;
-    const mediumPriorityCount = list.filter(h => h.healthScore >= 40 && h.healthScore < 70).length;
-    const lowPriorityCount = list.filter(h => h.healthScore >= 70).length;
+    const highPriorityCount = list.filter(h => getHealthLevel(h.healthScore) === 'warning').length;
+    const mediumPriorityCount = list.filter(h => getHealthLevel(h.healthScore) === 'attention').length;
+    const lowPriorityCount = list.filter(h => getHealthLevel(h.healthScore) === 'normal').length;
 
     return {
       avgHealthScore,
